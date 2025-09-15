@@ -1,0 +1,241 @@
+C51 COMPILER V9.60.7.0   I2C                                                               08/22/2025 16:50:56 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE I2C
+OBJECT MODULE PLACED IN .\Output\i2c.obj
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE ..\..\..\..\Library\StdDriver\src\i2c.c LARGE OPTIMIZE(7,SPEED) BROWSE I
+                    -NCDIR(..\..\..\..\Library\Device\Include;..\..\..\..\Library\StdDriver\inc) DEBUG OBJECTEXTEND PRINT(.\LST\i2c.lst) TABS
+                    -(2) OBJECT(.\Output\i2c.obj)
+
+line level    source
+
+   1          /**
+   2           ******************************************************************************
+   3           *
+   4           * @author     Bacancy Systems LLP 
+   5           * @date       13, September, 2021
+   6           * @File_name: i2c.c
+   7           ******************************************************************************
+   8           */
+   9           
+  10           
+  11           //File Function: MS51FB9AE I2C  code, the Slave address = 0x3C
+  12           /************************************************************************
+  13           * INCLUDES
+  14           ************************************************************************/
+  15          #include "MS51_16K.h"
+  16          #include "Common.h"
+  17          #include "i2c.h"
+  18          #include "Function_define_MS51_16K.h"
+  19          
+  20          /****************************************************************************
+  21           * MACROS
+  22           ***************************************************************************/
+  23          #define I2C_CLOCK                 14 
+  24          #define timeout_count             1000
+  25          #define I2C_SLAVE_ADDRESS         0x12
+  26          
+  27          /****************************************************************************
+  28           * PRIVATE FUNCTIONS
+  29           ****************************************************************************/
+  30          void I2C_Master_Open(unsigned long u32SYSCLK, unsigned long u32I2CCLK)
+  31          {
+  32   1          SFRS = 0x00;
+  33   1          I2CLK = (u32SYSCLK/4/u32I2CCLK-1); 
+  34   1          set_I2CON_I2CEN;
+  35   1      
+  36   1      }
+  37          
+  38          void I2C_Slave_Open( unsigned char u8SlaveAddress0)
+  39          {
+  40   1              SFRS = 0; 
+  41   1              I2ADDR = u8SlaveAddress0; 
+  42   1              set_I2CON_I2CEN;
+  43   1              set_I2CON_AA;
+  44   1      }
+  45          
+  46          void I2C_Close(void)
+  47          {
+  48   1          SFRS = 0;
+  49   1          clr_I2CON_I2CEN;
+  50   1      }
+  51          
+  52          
+  53          void I2C_Interrupt(unsigned char u8I2CStatus)
+C51 COMPILER V9.60.7.0   I2C                                                               08/22/2025 16:50:56 PAGE 2   
+
+  54          {
+  55   1          SFRS = 0;
+  56   1               switch (u8I2CStatus)
+  57   1               {
+  58   2                 case Enable: ENABLE_I2C_INTERRUPT; break;
+  59   2                 case Disable: DISABLE_I2C_INTERRUPT; break;
+  60   2               }
+  61   1      }
+  62          
+  63          
+  64          unsigned char I2C_GetStatus(void)
+  65          {
+  66   1          unsigned char u8i2cstat;
+  67   1          SFRS = 0;
+  68   1           u8i2cstat=I2STAT;
+  69   1          return (u8i2cstat);
+  70   1      }
+  71          
+  72          void I2C_Timeout( unsigned char u8I2CTRStatus )
+  73          {
+  74   1              switch (u8I2CTRStatus)
+  75   1              {
+  76   2                case Enable: set_I2TOC_DIV; set_I2TOC_I2TOCEN; break;
+  77   2                case Disable: clr_I2TOC_I2TOCEN; break;
+  78   2              }
+  79   1      }
+  80          
+  81          
+  82          void I2C_ClearTimeoutFlag(void)
+  83          {
+  84   1          SFRS = 0;
+  85   1          I2TOC&=0xFE; ;
+  86   1      }
+  87          
+  88          void I2C0_SI_Check(void)
+  89          {
+  90   1          clr_I2CON_SI;
+  91   1          
+  92   1          while(I2CON&SET_BIT3)     /* while SI==0; */
+  93   1          {
+  94   2              if(I2STAT == 0x00)
+  95   2              {
+  96   3                  set_I2CON_STO;
+  97   3              }
+  98   2              SI = 0;
+  99   2              if(!SI)
+ 100   2              {
+ 101   3                  clr_I2CON_I2CEN;
+ 102   3                  set_I2CON_I2CEN;
+ 103   3                  clr_I2CON_SI;
+ 104   3              } 
+ 105   2          }
+ 106   1      }
+ 107          
+ 108          
+ 109          void Init_I2C(void)
+ 110          {
+ 111   1         P13_OPENDRAIN_MODE;          // Modify SCL pin to Open drain mode. don't forget the pull high resister 
+             -in circuit
+ 112   1         P14_OPENDRAIN_MODE;          // Modify SDA pin to Open drain mode. don't forget the pull high resister 
+             -in circuit
+ 113   1          /* Set I2C clock rate */
+C51 COMPILER V9.60.7.0   I2C                                                               08/22/2025 16:50:56 PAGE 3   
+
+ 114   1          I2CLK = I2C_CLOCK; 
+ 115   1          I2CPX=0; 
+ 116   1          /* Enable I2C */
+ 117   1          set_I2CON_I2CEN;                                   
+ 118   1      }
+ 119          //========================================================================================================
+ 120          void I2C_Error(void)
+ 121          {
+ 122   1      
+ 123   1        while (1);    
+ 124   1      }
+ 125          void I2C_start(void)
+ 126          {
+ 127   1          signed int time = timeout_count;
+ 128   1                  set_STA;                                  
+ 129   1                  clr_SI;
+ 130   1                  while((SI == 0) && (time > 0))
+ 131   1                  {
+ 132   2                  time--;
+ 133   2                  };   
+ 134   1            
+ 135   1      }
+ 136          void I2C_stop(void)
+ 137          {
+ 138   1         
+ 139   1          signed int t = timeout_count;
+ 140   1          clr_SI;
+ 141   1          set_STO;
+ 142   1          while((STO == 1) && (t > 0))
+ 143   1          {
+ 144   2              t--;
+ 145   2          };  
+ 146   1      }
+ 147          //========================================================================================================
+ 148          
+ 149          void I2C_write(UINT8 u8DAT)
+ 150          {                              
+ 151   1          UINT16 t;
+ 152   1          t = timeout_count;
+ 153   1           
+ 154   1          clr_STA; 
+ 155   1          I2DAT = u8DAT;
+ 156   1          clr_SI;
+ 157   1          while((SI == 0) && (t > 0))
+ 158   1          {
+ 159   2              t--;
+ 160   2          };  
+ 161   1      }
+ 162          unsigned char I2C_read(unsigned char ack_mode)
+ 163          {
+ 164   1                  int t = timeout_count;
+ 165   1                  unsigned char value = 0x00;
+ 166   1                  set_AA;                                    
+ 167   1                  clr_SI;
+ 168   1                  while((SI == 0) && (t > 0))
+ 169   1                  {
+ 170   2                  t--;
+ 171   2                  };           
+ 172   1                  value = I2DAT;
+ 173   1                  if(ack_mode == I2C_NACK)
+ 174   1                  {
+ 175   2                  t = timeout_count;
+C51 COMPILER V9.60.7.0   I2C                                                               08/22/2025 16:50:56 PAGE 4   
+
+ 176   2                  clr_AA; 
+ 177   2                  clr_SI;
+ 178   2                  while((SI == 0) && (t > 0))
+ 179   2                  {
+ 180   3                  t--;
+ 181   3                  };           
+ 182   2                  }
+ 183   1      
+ 184   1                  return value;}
+ 185          void BQ24735_write(unsigned char address, unsigned int value)
+ 186          {
+ 187   1                  I2C_start();
+ 188   1                  I2C_write(I2C_SLAVE_ADDRESS);
+ 189   1                  I2C_write(address);
+ 190   1                  I2C_write(value & 0xFF);       //LSB
+ 191   1                  I2C_write(value >> ONE_BYTE);  // MSB
+ 192   1      
+ 193   1                  I2C_stop();
+ 194   1      }
+ 195          
+ 196          unsigned char BQ24735_read(unsigned char address)
+ 197          {
+ 198   1          unsigned char value = 0x00;
+ 199   1          I2C_start();
+ 200   1          I2C_write(I2C_SLAVE_ADDRESS);
+ 201   1          I2C_write(address);
+ 202   1          I2C_start();
+ 203   1          I2C_write(I2C_SLAVE_ADDRESS | I2C_R);
+ 204   1          value = I2C_read(I2C_NACK);
+ 205   1          I2C_stop();
+ 206   1          return value;
+ 207   1      }
+ 208          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    416    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----       8
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

@@ -1,0 +1,72 @@
+//digraph FSM {
+//     rankdir=LR;
+//     node [shape = circle, fontsize=12, fontname="Arial"];
+
+//     // States
+//     POWER_ON       [shape=doublecircle, style=filled, fillcolor=lightyellow];
+//     INIT;
+//     WAIT_5S;
+//     CHECK_MAINS;
+//     SEND_I2C_CMD;
+//     MAINS_PRESENT;
+//     CHECK_AC_PREV;
+//     DELAY_1S;
+//     CHECK_AC_LOST;
+//     UNLOCK;
+//     MAINS_ABSENT   [style=filled, fillcolor=lightblue];
+
+//     // Transitions
+//     POWER_ON -> INIT [label="Power on"];
+//     INIT -> WAIT_5S [label="AC_prev_State=Yes\nSendI2c_cmd=Yes\nsend_I2C_charging_cmd()"];
+//     WAIT_5S -> CHECK_MAINS [label="5s elapsed"];
+
+//     CHECK_MAINS -> SEND_I2C_CMD [label="Mains detect=Yes\nSendI2c_cmd==1"];
+//     CHECK_MAINS -> CHECK_AC_PREV [label="Mains detect=No"];
+
+//     SEND_I2C_CMD -> MAINS_PRESENT [label="Send_I2C_charging_cmd()\nAC_prev_State=1\nSendI2c_cmd=0"];
+//     MAINS_PRESENT -> CHECK_MAINS [label="Loop check"];
+
+//     CHECK_AC_PREV -> CHECK_MAINS [label="AC_prev_State=No"];
+//     CHECK_AC_PREV -> DELAY_1S [label="AC_prev_State=Yes"];
+
+//     DELAY_1S -> CHECK_AC_LOST [label="1s elapsed"];
+//     CHECK_AC_LOST -> CHECK_MAINS [label="AC_mains_lost=No"];
+//     CHECK_AC_LOST -> UNLOCK [label="AC_mains_lost=Yes"];
+
+//     UNLOCK -> MAINS_ABSENT [label="100ms pulse unlock pins\nReset lock pin\nAC_prev_State=0"];
+//     MAINS_ABSENT -> CHECK_MAINS [label="Loop check"];
+// }
+
+//FiniteStateMachine_v2
+digraph FSM {
+    rankdir=LR;
+    node [shape = circle, fontsize=12, fontname="Arial"];
+
+    // States
+    POWER_ON [shape=doublecircle, style=filled, fillcolor=lightyellow, label="POWER_ON\n"];
+    INIT [label="SYSTEM\nINIT"];
+    CHECK_MAINS [label="CHECK_MAINS"];
+    SEND_I2C_CMD [label="SEND_I2C_CMD\n(One-time)"];
+    CHARGE_BATTERY [label="CHARGE_BATTERY \n&\n GUNS POWER BY MAINS", style=filled, fillcolor=lightpink];
+    POWER_GUNS_MAINS [label="GUNS\n", style=filled, fillcolor="lightgrey"];
+    CHECK_AC_LOST [label="CHECK_AC_LOST"];
+    BATTERY_POWER [label="BATTERY_POWER", style=filled, fillcolor= palegreen];
+
+    // Transitions
+    POWER_ON -> INIT [label=""];
+    INIT -> CHECK_MAINS [label=""];
+
+    // Mains present first time
+    CHECK_MAINS -> SEND_I2C_CMD [label="PRESENT"];
+    CHARGE_BATTERY -> POWER_GUNS_MAINS [label="Lock and unlock control"];
+    POWER_GUNS_MAINS -> CHECK_MAINS [label=""];
+
+    // Mains already present
+    CHECK_MAINS -> CHARGE_BATTERY [label="PRESENT\n"];
+
+    // Mains absent
+    CHECK_MAINS -> CHECK_AC_LOST [label="\nNOT PRESENT"];
+    CHECK_AC_LOST -> BATTERY_POWER [label="\n"];
+    BATTERY_POWER -> POWER_GUNS_MAINS [label="\nUnlock Guns"];
+
+}

@@ -1,0 +1,457 @@
+C51 COMPILER V9.60.7.0   MAIN                                                              08/22/2025 16:50:57 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Output\main.obj
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE ..\main.c LARGE OPTIMIZE(7,SPEED) BROWSE INCDIR(..\..\..\..\Library\Devi
+                    -ce\Include;..\..\..\..\Library\StdDriver\inc) DEBUG OBJECTEXTEND PRINT(.\LST\main.lst) TABS(2) OBJECT(.\Output\main.obj)
+
+line level    source
+
+   1          /**
+   2           ******************************************************************************
+   3           *
+   4           * @author     Bacancy Systems LLP 
+   5           * @date       13, September, 2021
+   6           * @File_name: main.c
+   7           ******************************************************************************
+   8           */
+   9          //  File Function: MS51FB9AE SOC demo code
+  10          
+  11          /* project pin details 
+  12          +--------+-----------------------+
+  13          | GPIO   | Description           |
+  14          +--------+-----------------------+
+  15          | P1.4   | SDA [I2C]             |
+  16          | P1.3   | SCL [I2C]             |
+  17          +--------+-----------------------+
+  18          | P0.3   | mains detect [Input]] | 
+  19          +--------+-----------------------+
+  20          | P1.2   | Gun1_lock    [output] |
+  21          | P1.1   | Gun1_unlock  [output] |
+  22          +--------+-----------------------+
+  23          | P1.0   | Gun2_lock    [output] |
+  24          | P0.0   | Gun2_unlock  [output] |
+  25          +--------+-----------------------+
+  26          | P0.4   |
+  27          |[ADCch5]| BatterySense [ADC]    |
+  28          +--------+----------------------*/
+  29          
+  30          /************************************************************************
+  31           * INCLUDES
+  32           ************************************************************************/
+  33          #include "MS51_16K.H"
+  34          #include "i2c.h"
+  35          #include "math.h"
+  36          #include "uart.h"
+  37          
+  38          
+  39          /****************************************************************************
+  40           * MACROS
+  41           ***************************************************************************/
+  42          #define INPUT_CURRENT    0x3F
+  43          #define CHARGER_VOLTAGE  0x15
+  44          #define CHARGER_CURRENT  0x14
+  45          #define CHECK_BIT(x, pos) ((x) & (1UL << pos) )
+  46          
+  47          #undef UART0_DEBUG
+  48          //  --------------------------------- TIMER INTERVAL CALCULATION -----------------------------------------
+             ---------------------
+  49          #define TIMER_DELAY_US      1000    // Desired delay in microseconds (e.g., 1000 for 1ms)
+  50          #define SYS_CLOCK_FREQ      24000000UL  // System Clock = 24 MHz
+  51          #define TIMER0_PRESCALER    12UL        // Fsys/12 for Timer0
+  52          #define TIMER0_TICKS_PER_US (SYS_CLOCK_FREQ / TIMER0_PRESCALER / 1000000UL)  // = 2 ticks per �s
+  53          
+C51 COMPILER V9.60.7.0   MAIN                                                              08/22/2025 16:50:57 PAGE 2   
+
+  54          //  --------------------------------- PROJECT PINS -------------------------------------------------------
+             -------
+  55          #define MAINS_DETECT_PIN_SET_INPUT()    P03_INPUT_MODE
+  56          
+  57          #define SET_GUN_PINS_AS_OUTPUT()        do { \
+  58              /* GUN1 LOCK */   P12_PUSHPULL_MODE; \
+  59              /* GUN1 UNLOCK */ P11_PUSHPULL_MODE; \
+  60              /* GUN2 LOCK */   P10_PUSHPULL_MODE; \
+  61              /* GUN2 UNLOCK */ P00_PUSHPULL_MODE; \
+  62          } while(0)
+  63          
+  64          #define SET_GUN_PINS_AS_INPUT()  do { \
+  65             /* GUN1 LOCK   */ P12_INPUT_MODE; \
+  66             /* GUN1 UNLOCK */ P11_INPUT_MODE; \
+  67             /* GUN2 LOCK   */ P10_INPUT_MODE; \
+  68             /* GUN2 UNLOCK */ P00_INPUT_MODE; \
+  69          } while(0)
+  70          
+  71          
+  72          #define GUN1_LOCK_PIN                   P12
+  73          #define GUN1_UNLOCK_PIN                 P11
+  74          #define GUN2_LOCK_PIN                   P10
+  75          #define GUN2_UNLOCK_PIN                 P00
+  76          #define IS_AC_MAINS_PRESENT            (P03 == 0)  // returns true if mains signal is active
+  77          
+  78          /****************************************************************************
+  79           * GLOBAL VARIABLES
+  80           ****************************************************************************/
+  81          bit      bGunPinsConfigured = 1;    
+  82          
+  83          uint8_t  u8TH0_reload,  // Global variables to hold calculated TH0 and TL0
+  84                   u8TL0_reload;
+  85          
+  86          uint16_t u16Cnt = 0,
+  87                   u16AdcVal = 0,
+  88                   u16FilterVal = 0;
+  89          
+  90          uint32_t u32AccumulatedVal;
+  91          
+  92          float    fBattVolt = 0;   
+  93          
+  94          
+  95          /****************************************************************************
+  96           * PRIVATE FUNCTIONS
+  97           ****************************************************************************/
+  98          void vADC_Init(void);
+  99          void vUart_Init(void);
+ 100          void vMeasureBattery(void);
+ 101          void vGunInputAndI2CCmd(void);
+ 102          void vUnlock_BothGuns(void);
+ 103          void vTimer0_Init_Dynamic(uint16_t u16Delay_us);
+ 104          void vI2C_Send_charging_commands(void);
+ 105          float fConvertADCtoInputVoltage(uint16_t u16AdcCount);
+ 106          uint16_t u16ADC_GetData(void);
+ 107          
+ 108          /****************************************************************************
+ 109           * PHERIPHERAL ISR's
+ 110           ****************************************************************************/
+ 111          
+ 112          // Timer0 ISR (executes every 1ms or as per TIMER_DELAY_US)
+ 113          void Timer0_ISR(void) interrupt 1
+ 114          {
+C51 COMPILER V9.60.7.0   MAIN                                                              08/22/2025 16:50:57 PAGE 3   
+
+ 115   1          _push_(SFRS);
+ 116   1      
+ 117   1          TH0 = u8TH0_reload;
+ 118   1          TL0 = u8TL0_reload;
+ 119   1          TF0 = 0;
+ 120   1      
+ 121   1        if(++u16Cnt>250){
+ 122   2          u16Cnt = 0;
+ 123   2        }
+ 124   1         // Start ADC conversion
+ 125   1          clr_ADCF;
+ 126   1          set_ADCS;
+ 127   1        
+ 128   1          _pop_(SFRS);
+ 129   1      }
+ 130          
+ 131          /******************************************************************************
+ 132          The main C function.  Program execution starts
+ 133          here after stack initialization.
+ 134          ******************************************************************************/
+ 135          void main (void) 
+ 136          {
+ 137   1        bit bIsAcMainsPrevState = 1;      // Track previous AC mains state; assume AC is present at startup
+ 138   1        
+ 139   1        SET_GUN_PINS_AS_OUTPUT();         //set pins initially as input for safe operation
+ 140   1        MAINS_DETECT_PIN_SET_INPUT();     // Initialize AC mains detection pin
+ 141   1        
+ 142   1        vUart_Init();                     // Initialize UART0 for printf debugging
+ 143   1        vADC_Init();                      // Initialize ADC for battery voltage measurement
+ 144   1        vTimer0_Init_Dynamic(TIMER_DELAY_US);  // Initialize Timer0 with dynamic delay [currentl 1ms is used]
+ 145   1        
+ 146   1        Init_I2C();                            // Initialize I2C communication
+ 147   1        
+ 148   1        vI2C_Send_charging_commands();
+ 149   1      
+ 150   1        //Initially Sets all pins to LOW
+ 151   1        GUN1_LOCK_PIN    = 0;     
+ 152   1        GUN1_UNLOCK_PIN  = 0; 
+ 153   1        GUN2_LOCK_PIN    = 0;
+ 154   1        GUN2_UNLOCK_PIN  = 0;
+ 155   1        
+ 156   1      /******************************************************************************
+ 157   1       * Main application loop
+ 158   1       * - Monitors AC mains status
+ 159   1       * - Unlocks both guns when AC is lost (pulse once)
+ 160   1       * - Continuously measures battery voltage
+ 161   1       ******************************************************************************/
+ 162   1      while (1)
+ 163   1      {
+ 164   2          if (IS_AC_MAINS_PRESENT)
+ 165   2          {
+ 166   3              vGunInputAndI2CCmd();
+ 167   3              bIsAcMainsPrevState = 1;     // AC mains is confirmed present
+ 168   3          }
+ 169   2          else
+ 170   2          {
+ 171   3              if (bIsAcMainsPrevState == 1)
+ 172   3              {
+ 173   4                  Timer2_Delay(24000000,1,1000,1000);    // Wait 1 second to confirm AC loss
+ 174   4      
+ 175   4                  if (!IS_AC_MAINS_PRESENT)             // Confirm AC is still not present
+ 176   4                  {
+C51 COMPILER V9.60.7.0   MAIN                                                              08/22/2025 16:50:57 PAGE 4   
+
+ 177   5                      vUnlock_BothGuns();               // Apply 100 ms pulse to both unlock pins
+ 178   5                      bIsAcMainsPrevState = 0;          // Mark AC as gone to prevent retrigger
+ 179   5                  }
+ 180   4              }
+ 181   3          }
+ 182   2          vMeasureBattery();
+ 183   2      }
+ 184   1      }
+ 185          
+ 186          /****************************************************************************** 
+ 187           * Function Name : vUnlock_BothGuns
+ 188           * Description   : Releases control of both Gun1 and Gun2 solenoids by unlocking them.
+ 189           * Arguments     : None
+ 190           * Return Value  : None
+ 191           ******************************************************************************/
+ 192          void vUnlock_BothGuns(void)
+ 193          {
+ 194   1          GUN1_LOCK_PIN    = 0; // we dont have control guns so set both lock pins to low
+ 195   1          GUN2_LOCK_PIN    = 0;
+ 196   1         
+ 197   1          GUN1_UNLOCK_PIN  = 1;  // Apply pulse to Gun1 & Gun2 unlock pin
+ 198   1          Timer2_Delay(24000000,1,100,1000); // to unlock the Guns give a pulse duration of 100ms only
+ 199   1          GUN1_UNLOCK_PIN  = 0;  // Clear pulse
+ 200   1      
+ 201   1          Timer2_Delay(24000000,1,2000,1000); //short delay for safe operation
+ 202   1      
+ 203   1          GUN2_UNLOCK_PIN  = 1;  
+ 204   1          Timer2_Delay(24000000,1,100,1000); // to unlock the Guns give a pulse duration of 100ms only
+ 205   1          GUN2_UNLOCK_PIN  = 0;  
+ 206   1        
+ 207   1          Timer2_Delay(24000000,1,1000,1000); //short delay for safe operation
+ 208   1        
+ 209   1          bGunPinsConfigured = 1;  //Again whenever AC mains present then we have to reinit pins as Input so set i
+             -t here
+ 210   1      }
+ 211          /****************************************************************************** 
+ 212           * Function Name : vGUN_PIN_SET_Input_mode
+ 213           * Description   : In this mode device not taking any control.
+ 214           * Arguments     : None
+ 215           * Return Value  : None
+ 216           ******************************************************************************/
+ 217          void vGunInputAndI2CCmd()
+ 218          {
+ 219   1        if(bGunPinsConfigured)
+ 220   1        {
+ 221   2          vI2C_Send_charging_commands();
+ 222   2      
+ 223   2          //for one time execution reset the flag
+ 224   2          bGunPinsConfigured = 0;
+ 225   2        } 
+ 226   1      }
+ 227          
+ 228          /****************************************************************************** 
+ 229           * Function Name : vI2C_Send_charging_commands
+ 230           * Description   : This function sends charging command to BQ IC [ for battery charge require voltage and 
+             -current configuration].
+ 231           * Arguments     : None
+ 232           * Return Value  : None
+ 233           ******************************************************************************/
+ 234          void vI2C_Send_charging_commands()
+ 235          {
+ 236   1        unsigned char manf_id ,dev_id;    // For storing manufacturer and device IDs 
+C51 COMPILER V9.60.7.0   MAIN                                                              08/22/2025 16:50:57 PAGE 5   
+
+ 237   1        int chargOption;                  // Charger option placeholder (currently unused)
+ 238   1        int bdta;                         // Battery data placeholder (currently unused)
+ 239   1      
+ 240   1        manf_id = BQ24735_read(0xFE);          // Read manufacturer ID
+ 241   1        dev_id = BQ24735_read(0xFF);           // Read device ID
+ 242   1      
+ 243   1        Timer2_Delay(24000000,1,1000,1000);    // Short delay before configuring charger
+ 244   1        
+ 245   1        //BQ24735_write(0x12, 0xFF02);    // Set input current limit to 1024 mA 
+ 246   1        
+ 247   1        BQ24735_write(INPUT_CURRENT,0x400);    // Set input current limit to 1024 mA
+ 248   1        
+ 249   1        /*  
+ 250   1        /---------------- Charge current configuration values ---------------------/
+ 251   1        -----------------------------------
+ 252   1        Register      Charge     
+ 253   1        value         current                   voltage
+ 254   1                      value 
+ 255   1        -------------------------------------
+ 256   1        0x0040        64ma [Old  , New1,  ]     2.1
+ 257   1        0x0080        128ma[80ma,  28ma,  ]     11.5
+ 258   1        0x0100        256ma[220ma, 42ma,  ]     8.5
+ 259   1        0x0200        512mA[480ma, 84ma,  ]     10.5      
+ 260   1        0x0400        1 amp[770ma, 700ma, ]     10.65       
+ 261   1        ------------------------------------- 
+ 262   1      #define INPUT_CURRENT    0x3F
+ 263   1      #define CHARGER_VOLTAGE  0x15
+ 264   1      #define CHARGER_CURRENT  0x14
+ 265   1        
+ 266   1        */
+ 267   1        BQ24735_write(CHARGER_CURRENT,0x0400); // Set charging current to 1024 mA
+ 268   1        BQ24735_write(CHARGER_VOLTAGE,0x3400); // Set charging voltage to 13312 mV
+ 269   1      
+ 270   1        Timer2_Delay(24000000,1,5000,1000);    // Short delay before configuring charger
+ 271   1      }
+*** WARNING C280 IN LINE 237 OF ..\main.c: 'chargOption': unreferenced local variable
+*** WARNING C280 IN LINE 238 OF ..\main.c: 'bdta': unreferenced local variable
+ 272          
+ 273          /******************************************************************************
+ 274           * Function Name: vMeasureBattery
+ 275           * Description  : measures the battery voltage
+ 276           * Arguments    : none
+ 277           * Return Value : None
+ 278           ******************************************************************************/
+ 279          void vMeasureBattery(void)
+ 280          {
+ 281   1          // Check if ADC conversion is done
+ 282   1          if (ADCF)
+ 283   1          {
+ 284   2            u16AdcVal = u16ADC_GetData();
+ 285   2            u32AccumulatedVal -= (u32AccumulatedVal >>4);
+ 286   2            u32AccumulatedVal += u16AdcVal;
+ 287   2            u16FilterVal =  u32AccumulatedVal >>4;      
+ 288   2            fBattVolt = fConvertADCtoInputVoltage(u16FilterVal);
+ 289   2            clr_ADCF;
+ 290   2          }
+ 291   1      
+ 292   1         //to print adc values enable this it will print it UART_0  
+ 293   1         //#ifdef UART0_DEBUG    
+ 294   1            //printf("\n ADC: %d, BattVol: %f", u16FilterVal,fBattVolt);
+ 295   1            //Timer2_Delay(24000000,1,100,1000);
+ 296   1         //#endif   
+C51 COMPILER V9.60.7.0   MAIN                                                              08/22/2025 16:50:57 PAGE 6   
+
+ 297   1      }
+ 298          
+ 299          /******************************************************************************
+ 300           * Function Name: fConvertADCtoInputVoltage
+ 301           * Description  : Converts 12-bit ADC raw count to actual input voltage (before
+ 302           *                voltage divider). voltage divider R1 = 147k, R2 = 51k.
+ 303           * Arguments    : u16AdcCount - Raw ADC value (0 to 4095 for 12-bit ADC)
+ 304           * Return Value : float - Actual input voltage in volts
+ 305           ******************************************************************************/
+ 306          float fConvertADCtoInputVoltage(uint16_t u16AdcCount)
+ 307          {
+ 308   1          float fAdcVoltage;     // Voltage at ADC pin (after divider)
+ 309   1          float fInputVoltage;   // Actual input voltage (before divider)
+ 310   1       
+ 311   1          const float  fR1 = 147.0f;
+ 312   1          const float  fR2 = 51.0f;
+ 313   1          const float  fDIVIDER_RATIO   = fR2 / (fR1 + fR2);  // R2 / (R1 + R2)
+ 314   1          const float  fADC_REF_VOLTAGE = 3.3f;        // ADC reference voltage
+ 315   1          const uint16_t u16ADC_MAX_COUNT = 4095;       // 12-bit ADC maximum count
+ 316   1      
+ 317   1          // Step 1: Convert raw ADC count to voltage at the ADC pin
+ 318   1          fAdcVoltage = ((float)u16AdcCount * fADC_REF_VOLTAGE) / u16ADC_MAX_COUNT;
+ 319   1      
+ 320   1          // Step 2: Calculate the original input voltage before the voltage divider
+ 321   1          fInputVoltage = fAdcVoltage / fDIVIDER_RATIO;
+ 322   1      
+ 323   1          return fInputVoltage;
+ 324   1      }
+ 325          
+ 326          /******************************************************************************
+ 327           * Function Name: vADC_Init
+ 328           * Description  : This function initializes the ADC with software trigger mode.
+ 329           *                ADC is triggered using Timer0 at intervals defined by TIMER_DELAY_US.
+ 330           *                It configures the selected channel for analog input.
+ 331           * Arguments    : None
+ 332           * Return Value : None
+ 333           ******************************************************************************/
+ 334          void vADC_Init()
+ 335          {
+ 336   1          ADCCON1 &= ~(0x30);               // Clear ADC clock divider bits
+ 337   1          ADCCON1 |= (0x30);                // Set ADC clock divider
+ 338   1      
+ 339   1          P04_INPUT_MODE;                   // adc channel 5 is used for batt sense which is on PO4 pin so it as first inpu
+             -t
+ 340   1      
+ 341   1          AINDIDS |= (1 << 5);    // Enable analog input for the selected channel
+ 342   1      
+ 343   1          ADCCON1 |= (1 << 0);              // Enable the ADC module
+ 344   1      
+ 345   1          ADCCON0 &= ~(0x0F);               // Clear previous channel selection
+ 346   1          ADCCON0 |= (5 & 0x07);  // Select desired ADC channel
+ 347   1      }
+ 348          
+ 349          /******************************************************************************
+ 350           * Function Name: u16ADC_GetData
+ 351           * Description  : This function gives the adc converted result value
+ 352           * Arguments    : None
+ 353           * Return Value : 16bit adc value
+ 354           ******************************************************************************/
+ 355          uint16_t u16ADC_GetData(void)
+ 356          {
+ 357   1          return ((ADCRH << 4) | (ADCRL & 0x0F)); // return adc values 
+C51 COMPILER V9.60.7.0   MAIN                                                              08/22/2025 16:50:57 PAGE 7   
+
+ 358   1      }
+ 359          
+ 360          /******************************************************************************
+ 361           * Function Name: vTimer0_Init_Dynamic
+ 362           * Description  : This function initializes Timer0 in 13-bit mode to generate
+ 363           *                a dynamic delay based on the input time in microseconds.
+ 364           *                It calculates the reload value and configures Timer0 to
+ 365           *                overflow after the specified delay.
+ 366           * Arguments    : u16Delay_us - Desired delay in microseconds (µs)
+ 367           * Return Value : None
+ 368           ******************************************************************************/
+ 369          void vTimer0_Init_Dynamic(uint16_t u16Delay_us)
+ 370          {
+ 371   1          uint16_t u16Reload;
+ 372   1          uint16_t u16Ticks = u16Delay_us * TIMER0_TICKS_PER_US;
+ 373   1      
+ 374   1          // Limit the maximum tick count to 13-bit timer max value (8192)
+ 375   1          if (u16Ticks >= 8192)
+ 376   1              u16Ticks = 8191;
+ 377   1      
+ 378   1          // Calculate the reload value to count from (8192 - desired ticks)
+ 379   1          u16Reload = 8192 - u16Ticks;
+ 380   1      
+ 381   1          // Extract high and low parts of the 13-bit reload value
+ 382   1          u8TH0_reload = (u16Reload >> 5) & 0xFF;  // Upper 8 bits
+ 383   1          u8TL0_reload = u16Reload & 0x1F;         // Lower 5 bits [ so total 13bits ]
+ 384   1      
+ 385   1          // Load values into Timer0 registers
+ 386   1          TH0 = u8TH0_reload;
+ 387   1          TL0 = u8TL0_reload;
+ 388   1      
+ 389   1          // Configure and start Timer0
+ 390   1          ENABLE_TIMER1_MODE0;        // Set Timer0 to 13-bit mode (Mode 0)
+ 391   1          TIMER0_FSYS_DIV12;          // Set clock source as system clock divided by 12
+ 392   1          ENABLE_TIMER0_INTERRUPT;    // Enable Timer0 interrupt (optional)
+ 393   1          ENABLE_GLOBAL_INTERRUPT;    // Enable global interrupts
+ 394   1          set_TCON_TR0;               // Start Timer0
+ 395   1      }
+ 396          
+ 397          /******************************************************************************
+ 398           * Function Name: vUart_Init
+ 399           * Description  : This function initializes UART0 for debugging purposes using
+ 400           *                printf. It sets the system clock, configures the UART pin,
+ 401           *                and sets the baud rate.
+ 402           * Arguments    : None
+ 403           * Return Value : None
+ 404           ******************************************************************************/
+ 405          void vUart_Init(void)
+ 406          {
+ 407   1          /* UART0 setting for printf function */
+ 408   1          MODIFY_HIRC(HIRC_24);                     // Set internal RC to 24 MHz
+ 409   1          P06_QUASI_MODE;                           // Set P0.6 as quasi mode for TX
+ 410   1          UART_Open(24000000, UART0_Timer3, 115200); // Initialize UART0 using Timer3, 115200 baud
+ 411   1          ENABLE_UART0_PRINTF;                      // Enable printf support via UART0
+ 412   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1190    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =     16      26
+   PDATA SIZE       =   ----    ----
+C51 COMPILER V9.60.7.0   MAIN                                                              08/22/2025 16:50:57 PAGE 8   
+
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      1       1
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  2 WARNING(S),  0 ERROR(S)
