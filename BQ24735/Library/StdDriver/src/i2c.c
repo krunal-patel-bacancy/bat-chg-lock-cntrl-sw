@@ -181,28 +181,93 @@ unsigned char I2C_read(unsigned char ack_mode)
             };           
             }
 
-            return value;}
+            return value;
+}
+
+/****************************************************************************** 
+ * Function Name : BQ24735_write
+ * Description   : Write 16-bit value to BQ24735 register
+ *                 BQ24735 expects: LSB first, then MSB
+ * Arguments     : address - Register address (0x14, 0x15, 0x3F, etc.)
+ *                 value - 16-bit value to write
+ * Return Value  : None
+ ******************************************************************************/
 void BQ24735_write(unsigned char address, unsigned int value)
 {
-            I2C_start();
-            I2C_write(I2C_SLAVE_ADDRESS);
-            I2C_write(address);
-						I2C_write(value & 0xFF);			 //LSB
-						I2C_write(value >> ONE_BYTE);  // MSB
-
-            I2C_stop();
+    I2C_start();
+    I2C_write(I2C_SLAVE_ADDRESS);
+    I2C_write(address);
+    I2C_write(value & 0xFF);       // Send LSB first
+    I2C_write((value >> 8) & 0xFF); // Send MSB second
+    I2C_stop();
 }
 
-unsigned char BQ24735_read(unsigned char address)
+/****************************************************************************** 
+ * Function Name : BQ24735_read
+ * Description   : Read 16-bit value from BQ24735 register
+ *                 BQ24735 returns: LSB first, then MSB
+ * Arguments     : reg - Register address to read from
+ * Return Value  : 16-bit register value, or 0xFFFF on error
+ ******************************************************************************/
+uint16_t BQ24735_read(uint8_t reg)
 {
-		unsigned char value = 0x00;
-		I2C_start();
-		I2C_write(I2C_SLAVE_ADDRESS);
-		I2C_write(address);
-		I2C_start();
-		I2C_write(I2C_SLAVE_ADDRESS | I2C_R);
-		value = I2C_read(I2C_NACK);
-		I2C_stop();
-		return value;
+    uint8_t lsb, msb;
+
+    EA = 0;   // Disable interrupts (good practice)
+
+    I2C_start();
+    if (I2STAT != 0x08) goto error;
+
+    I2C_write(I2C_SLAVE_ADDRESS | I2C_W);
+    if (I2STAT != 0x18) goto error;
+
+    I2C_write(reg);
+    if (I2STAT != 0x28) goto error;
+
+    I2C_start();
+    if (I2STAT != 0x10) goto error;   // Repeated START
+
+    I2C_write(I2C_SLAVE_ADDRESS | I2C_R);
+    if (I2STAT != 0x40) goto error;
+
+    // BQ24735 sends LSB first, then MSB
+    lsb = I2C_read(I2C_ACK);
+    if (I2STAT != 0x50) goto error;
+
+    msb = I2C_read(I2C_NACK);
+    if (I2STAT != 0x58) goto error;
+
+    I2C_stop();
+    EA = 1;
+
+    // Combine: MSB in upper byte, LSB in lower byte
+    return ((uint16_t)msb << 8) | lsb;
+
+error:
+    I2C_stop();
+    EA = 1;
+    return 0xFFFF;   // Explicit error
 }
 
+/****************************************************************************** 
+ * Function Name : BQ24735_read_retry
+ * Description   : Read with retry mechanism for better reliability
+ * Arguments     : reg - Register address to read from
+ * Return Value  : 16-bit register value, or 0xFFFF after all retries fail
+ ******************************************************************************/
+uint16_t BQ24735_read_retry(uint8_t reg)
+{
+    uint8_t i;
+    uint16_t val;
+
+    for (i = 0; i < 3; i++)   // 3 retries
+    {
+        val = BQ24735_read(reg);
+        if (val != 0xFFFF)
+            return val;
+
+        Timer2_Delay(24000000, 1, 10, 1000); // 10 ms backoff (increased from 2ms)
+    }
+
+    return 0xFFFF;
+}

@@ -1,0 +1,28 @@
+# Keil generated files
+*.lst
+*.m51
+*.obj
+*.o
+*.hex
+*.bin
+*.htm
+*.axf
+*.map
+*.uvopt
+*.uvguix.*
+*.bak
+*.crf
+*.d
+*.dep
+*.lnp
+
+# Keil build folders (** means any subdirectory)
+**/LST/
+**/Output/
+**/Objects/
+**/Listings/
+**/DebugConfig/
+**/RTE/
+
+# Log files
+*.log

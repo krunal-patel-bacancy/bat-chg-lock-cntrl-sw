@@ -19,6 +19,7 @@
 
 #define      I2C_R    1
 #define      I2C_W    0
+#define      I2C_ACK  0
 #define      I2C_NACK  1
 #define      ONE_BYTE  8
 /****************************************************************************
@@ -32,6 +33,9 @@ void I2C_stop(void);
 unsigned char I2C_read(unsigned char ack_mode);
 void I2C_write(unsigned char value);
 void I2C_Read_Process(UINT8 u8DAT);
-unsigned char BQ24735_read(unsigned char address);
+/*unsigned char BQ24735_read(unsigned char address);*/
+uint16_t BQ24735_read(uint8_t reg);
+uint16_t BQ24735_read_retry(uint8_t reg);
+
 void BQ24735_write(unsigned char address, unsigned int value);
 #endif
