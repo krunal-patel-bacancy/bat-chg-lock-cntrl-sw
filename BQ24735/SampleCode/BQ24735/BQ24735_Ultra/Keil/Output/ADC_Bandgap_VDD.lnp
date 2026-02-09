@@ -1,9 +1,0 @@
-".\Output\i2c.obj",
-".\Output\main.obj",
-".\Output\sys.obj",
-".\Output\uart.obj",
-".\Output\delay.obj",
-".\Output\STARTUP.obj" 
-TO ".\Output\ADC_Bandgap_VDD" 
-PRINT(".\LST\ADC_Bandgap_VDD.m51") RAMSIZE(256) 
-DISABLEWARNING (16) 
