@@ -43,7 +43,7 @@
 /****************************************************************************
  * USER CONFIGURATION - CRITICAL: USE HIGHER CURRENT!
  ****************************************************************************/
-#define SELECTED_CHARGE_CURRENT   CHARGE_CURRENT_1024MA     // <-- MUST BE =512mA
+#define SELECTED_CHARGE_CURRENT   CHARGE_CURRENT_512MA     // <-- MUST BE =512mA
 #define SELECTED_INPUT_CURRENT    INPUT_CURRENT_1024MA
 #define SELECTED_CHARGE_VOLTAGE   CHARGE_VOLTAGE_12_6V
 
@@ -102,8 +102,9 @@ float    fBattVolt = 0;
 float    fAdcVoltage;
 float    fInputVoltage;
 uint16_t u16ReadWhileACPresent = 0;
-uint16_t u16TotalTimeCnt = 0;
-
+uint16_t u16StatusTimer = 0;
+uint16_t u16Reset_BQ_IC = 0;
+uint16_t u16VerifyCounter = 0;
 /****************************************************************************
  * FUNCTION PROTOTYPES
  ****************************************************************************/
@@ -113,6 +114,7 @@ void vInit_BQ24735(void);
 void vMeasureBattery(void);
 void vUnlock_BothGuns(void);
 void vRecover_I2C_Bus(void);
+void vTimer0_Init(void);
 void vBQ24735_HardReset(void);
 bit bBQ24735_WaitReady(void);
 bit bConfigure_BQ24735(void);
@@ -123,20 +125,24 @@ uint16_t u16ADC_GetData(void);
 /****************************************************************************
  * TIMER0 ISR
  ****************************************************************************/
+/****************************************************************************
+ * TIMER0 ISR — 1ms tick
+ ****************************************************************************/
 void Timer0_ISR(void) interrupt 1
 {
-    _push_(SFRS);
     TH0 = u8TH0_reload;
     TL0 = u8TL0_reload;
     TF0 = 0;
-    
-    if(++u16Cnt > 250) {
-        u16Cnt = 0;
-    }
-    
+
+    // Increment all timers
+   
+    u16StatusTimer++;
+		u16Reset_BQ_IC++;
+   
+
+    // Trigger ADC every tick
     clr_ADCF;
     set_ADCS;
-    _pop_(SFRS);
 }
 
 /******************************************************************************
@@ -152,7 +158,7 @@ void main (void)
     MAINS_DETECT_PIN_SET_INPUT();
     vUart_Init();
     vADC_Init();
-    
+    vTimer0_Init();
     printf("\r\n========================================\r\n");
     printf("  BQ24735 Charger Controller v2.2\r\n");
     printf("  Charge Current: %dmA\r\n", SELECTED_CHARGE_CURRENT);
@@ -190,88 +196,87 @@ void main (void)
         Timer2_Delay(24000000, 1, 20, 1000);
     }
     
-    /******************************************************************************
-     * MAIN LOOP - MONITOR CHARGING WITH PROPER AC DEBOUNCING
-     ******************************************************************************/
-    while (1)
-    {
-      
-        static uint16_t u16VerifyCounter = 0;
-        
-        vMeasureBattery();
+	/******************************************************************************
+	 * MAIN LOOP - MONITOR CHARGING WITH PROPER AC DEBOUNCING
+	 ******************************************************************************/
+	while (1)
+	{
+		/******************************************************************************
+		 * AC MAINS PRESENT - CHARGING MODE
+		 ******************************************************************************/
+			if (IS_AC_MAINS_PRESENT)
+			{
+					/* -------- AC JUST BECAME PRESENT -------- */
+					if (bIsAcMainsPrevState == 0)
+					{							
+						 // Verify AC is stable before proceeding
+							if(!bCheck_AC_Stable(1))
+							{
+									printf("AC unstable - ignoring transient\r\n");
+									continue;
+							}
+							else{
+									printf("\r\n========================================\r\n");
+									printf("AC POWER RESTORED (stable)\r\n");
+									printf("========================================\r\n");
+									vInit_BQ24735();
 
-        /******************************************************************************
-         * AC MAINS PRESENT - CHARGING MODE
-         ******************************************************************************/
-        if (IS_AC_MAINS_PRESENT)
-        {
-            /* -------- AC JUST BECAME PRESENT -------- */
-            if (bIsAcMainsPrevState == 0)
-            {							
-               // Verify AC is stable before proceeding
-                if(!bCheck_AC_Stable(1))
-                {
-                    printf("AC unstable - ignoring transient\r\n");
-								}
-								else{
-										printf("\r\n========================================\r\n");
-										printf("AC POWER RESTORED (stable)\r\n");
-										printf("========================================\r\n");
-										vInit_BQ24735();
-										
-									
-										// Reset state
-										bBQ24735_OK = 0;
-										u16TotalTimeCnt = 0;
-										u16VerifyCounter = 0;
-										bIsAcMainsPrevState = 1;
-							}	
+									// Reset state
+									u16VerifyCounter = 0;
+									bIsAcMainsPrevState = 1;
+						}	
+				}
+			}
+			/******************************************************************************
+			 * AC MAINS LOST - SAFETY MODE
+			 ******************************************************************************/
+			else
+			{
+					if (bIsAcMainsPrevState == 1)
+					{
+							// Verify AC is actually lost (debounce)
+							if(!bCheck_AC_Stable(0))
+							{
+									printf("AC flicker detected - stabilizing...\r\n");
+								  continue;  
+							}
+							else
+							{
+								printf("\r\n========================================\r\n");
+								printf("!!! AC POWER LOST (confirmed) !!!\r\n");
+								printf("========================================\r\n");
+
+								// Unlock guns
+								printf("Unlocking guns...\r\n");
+								vUnlock_BothGuns();
+								
+								bIsAcMainsPrevState = 0;
+								u16VerifyCounter = 0;
+								
+								printf("Waiting for AC power...\r\n");
+								printf("========================================\r\n\r\n");
+							}
 					}
-					/* -------- STATUS PRINT -------- */
-					printf("BATT=%.2fV  (runtime=%u sec)\r\n", fBattVolt, u16VerifyCounter++);			
-					Timer2_Delay(24000000, 1, 1000, 1000);								
-
-        }
-        /******************************************************************************
-         * AC MAINS LOST - SAFETY MODE
-         ******************************************************************************/
-        else
-        {
-            if (bIsAcMainsPrevState == 1)
-            {
-                // Verify AC is actually lost (debounce)
-                if(!bCheck_AC_Stable(0))
-                {
-                    printf("AC flicker detected - stabilizing...\r\n");
-                }
-                
-                printf("\r\n========================================\r\n");
-                printf("!!! AC POWER LOST (confirmed) !!!\r\n");
-                printf("Total runtime: %u seconds\r\n", u16TotalTimeCnt);
-                printf("========================================\r\n");
-                
-                // Disable charging
-                //BQ24735_write(CHARGER_CURRENT, 0x0000);
-                //Timer2_Delay(24000000, 1, 50, 1000);
-                
-                // Unlock guns
-                printf("Unlocking guns...\r\n");
-                vUnlock_BothGuns();
-                
-                // Reset state
-                bBQ24735_OK = 0;
-                bIsAcMainsPrevState = 0;
-                u16TotalTimeCnt = 0;
-                u16VerifyCounter = 0;
-                
-                printf("Waiting for AC power...\r\n");
-                printf("========================================\r\n\r\n");
-            }
-            
-            // While AC is lost, just wait
-            Timer2_Delay(24000000, 1, 1000, 1000);
-        }
-    }
+			}
+	
+		/*print batter status here*/
+		if(u16StatusTimer>1000)
+		{
+				vMeasureBattery();
+				/* -------- STATUS PRINT -------- */
+				printf("BATT=%.2fV  (runtime=%u sec)\r\n", fBattVolt, u16VerifyCounter++);			
+				u16StatusTimer = 0;
+		}
+		if(u16Reset_BQ_IC>60000)
+		{
+			printf("\r\n========================================\r\n");
+			printf("Periodic BQ RESET... \r\n");
+			printf("========================================\r\n");
+			vInit_BQ24735();
+			u16Reset_BQ_IC = 0;
+		}
+	
+	}
 }
 
 /******************************************************************************
@@ -344,6 +349,28 @@ void vBQ24735_HardReset(void)
 /******************************************************************************
  * Function: bConfigure_BQ24735
  ******************************************************************************/
+/*
+Here's the clean table:
+
+| Bit | Value | Field | Description |
+|-----|-------|-------|-------------|
+| 15 | 1 | CHARGE_INHIBIT | Charger disabled — inhibits charging |
+| 14 | 0 | ACOC | AC overcurrent threshold = 133% of nominal |
+| 13 | 0 | BOOST_MODE | Boost mode disabled |
+| 12 | 1 | Reserved | Factory default |
+| 11 | 0 | Reserved | — |
+| 10 | 0 | Reserved | — |
+| 9 | 0 | Reserved | — |
+| 8 | 0 | Reserved | — |
+| 7 | 0 | LOWPOWER | Normal power mode |
+| 6 | 0 | Reserved | — |
+| 5 | 1 | EMI_FREQ_ADJ | Switching frequency adjusted for EMI |
+| 4 | 0 | Reserved | — |
+| 3 | 0 | Reserved | — |
+| 2 | 0 | IOUT | IOUT pin reports input current |
+| 1 | 0 | LEARN | Battery learn cycle disabled |
+| 0 | 0 | IFAULT | No fault |
+*/
 bit bConfigure_BQ24735(void)
 {
     uint16_t u16Read;
@@ -362,7 +389,7 @@ bit bConfigure_BQ24735(void)
     Timer2_Delay(24000000, 1, BQ_CONFIG_DELAY_MS, 1000);
 
     // Configure options
-    u16ChargeOptions = 0x1020 |(1<<15);
+    u16ChargeOptions = 0x1020;
     BQ24735_write(CHARGE_OPTION, u16ChargeOptions);
     Timer2_Delay(24000000, 1, BQ_CONFIG_DELAY_MS, 1000);
 
@@ -499,6 +526,7 @@ void vUart_Init(void)
 void vInit_BQ24735()
 {
 	 uint8_t u8ConfigAttempt;
+	 bBQ24735_OK = 0;
   	for(u8ConfigAttempt = 0; u8ConfigAttempt < MAX_CONFIG_RETRIES; u8ConfigAttempt++)
     {
         printf("Attempt %d/%d... ", u8ConfigAttempt + 1, MAX_CONFIG_RETRIES);
@@ -538,4 +566,30 @@ void vInit_BQ24735()
     }
     
     u8ConsecutiveErrors = 0;
-	}
+}
+
+/******************************************************************************
+ * Function: vTimer0_Init
+ * Description: Continuous 1ms tick for u16Cnt and ADC triggering
+ ******************************************************************************/
+void vTimer0_Init(void)
+{
+    // 16-bit mode, 1ms interval
+    // Reload = 65536 - (24000000 / 12 / 1000) = 65536 - 2000 = 63536
+    uint16_t u16Reload = 65536 - 
+                        (SYS_CLOCK_FREQ / TIMER0_PRESCALER / 1000UL);
+
+    u8TH0_reload = (uint8_t)(u16Reload >> 8);
+    u8TL0_reload = (uint8_t)(u16Reload & 0xFF);
+
+    TH0 = u8TH0_reload;
+    TL0 = u8TL0_reload;
+
+    TMOD &= 0xF0;
+    TMOD |= 0x01;       // Mode 1 - 16 bit continuous
+    
+    TF0 = 0;
+    ET0 = 1;
+    EA  = 1;
+    set_TR0;            // Start and never stop
+}
