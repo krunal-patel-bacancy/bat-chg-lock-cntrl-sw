@@ -15,6 +15,12 @@
 #include "math.h"
 #include "uart.h"
 
+#define VERSION_MAJOR                   (1U)
+#define VERSION_MINOR                   (0U)
+#define VERSION_PATCH                   (0U)
+#define FW_VERSION                      ((VERSION_MAJOR * 100) + (VERSION_MINOR * 10) + (VERSION_PATCH))
+
+
 /****************************************************************************
  * MACROS - BQ24735 REGISTER ADDRESSES
  ***************************************************************************/
@@ -160,7 +166,8 @@ void main (void)
     vADC_Init();
     vTimer0_Init();
     printf("\r\n========================================\r\n");
-    printf("  BQ24735 Charger Controller v2.2\r\n");
+		printf("BQ24735 Charger Controller FW Version: %u.%u.%u\r\n",  VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH);
+
     printf("  Charge Current: %dmA\r\n", SELECTED_CHARGE_CURRENT);
     printf("========================================\r\n");
 
